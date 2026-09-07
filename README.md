@@ -104,8 +104,29 @@ weer weg.
 
 Elke nacht om 03:30 een `pg_dump` naar `/var/backups/klantportaal`, zeven
 nachten bewaard. Dat is bedoeld tegen een misgelopen migratie of een
-verkeerde handeling, niet tegen brand. Neem dat pad mee in je
-Proxmox-back-up als je het echt wil bewaren.
+verkeerde handeling, niet tegen brand.
+
+**Die dump bevat de database, niet de bijlagen.** De bestanden van je
+klanten staan in `/var/lib/klantportaal/uploads` en gaan alleen mee als je
+de hele container in je Proxmox-back-up opneemt. Doe dat, anders zijn die
+bestanden weg bij een defecte container en heb je wel een database die
+ernaar verwijst.
+
+### Ruimte
+
+De schijfgrootte die je bij de installatie kiest is je opslaggrens, want
+bijlagen en database staan op hetzelfde volume. Twee grenzen houden dat
+beheersbaar:
+
+| Grens | Waarvoor |
+|---|---|
+| Quotum per klant | Voorkomt dat een klant de ruimte van de anderen opeet |
+| Schijfvloer, 2 GB of een tiende van het volume | Houdt ruimte vrij die alleen de database mag gebruiken |
+
+Die tweede is de belangrijke. Loopt het volume vol, dan kan Postgres zijn
+WAL niet meer wegschrijven en ligt het hele portaal plat, voor alle
+klanten. De applicatie zegt daarom nee tegen uploads voordat het zover
+komt.
 
 ## Wat er in de container komt
 
@@ -117,6 +138,7 @@ Proxmox-back-up als je het echt wil bewaren.
 | Collatie | ICU `nl-NL` | Taalkundig correcte sortering, gelijk op elk platform. **Later niet te wijzigen zonder dump-en-restore**, dus het script controleert het na het aanmaken |
 | Gebruiker | `klantportaal`, geen root | De service heeft geen rootrechten nodig |
 | Bind-adres | `HOST=0.0.0.0` plus firewallregel | De tunnel is meestal een aparte container en moet erbij kunnen. De applicatie luistert standaard alleen op loopback, dus dit is een bewuste keuze die zichtbaar in `.env` staat |
+| Bijlagen | `/var/lib/klantportaal/uploads`, in dezelfde container | Alles op een plek. Staat BUITEN de git-map, want `update` weigert bij een vervuilde werkmap. De applicatie houdt zelf ruimte vrij voor de database en weigert uploads voordat de schijf vol is |
 | Tijdzone | Europe/Amsterdam | De applicatie toont tijden in die zone, en een container op UTC maakt het opzoeken van een fout onnodig lastig |
 
 ## Als iets niet werkt

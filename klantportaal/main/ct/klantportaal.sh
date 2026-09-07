@@ -133,9 +133,15 @@ _VALID=""
 for _s in "${STORAGE_LIST[@]}"; do [[ "$_s" == "$STORAGE" ]] && _VALID=1 && break; done
 [[ -z "$_VALID" ]] && msg_error "'${STORAGE}' is geen actieve storage pool. Kies uit: ${STORAGE_LIST[*]}"
 
-# Ruimer dan een dashboardcontainer: hier zit Postgres in, plus de
-# nachtelijke dumps.
-DISK=$(ask        "Disk (GB)"           "8")
+# Postgres, de nachtelijke dumps EN de bijlagen die klanten uploaden.
+# Dat laatste staat bewust in dezelfde container, maar het betekent wel
+# dat de applicatie ruimte moet vrijhouden voor de database. Loopt het
+# volume vol, dan kan Postgres zijn WAL niet meer wegschrijven en ligt
+# het hele portaal plat. Zie src/platform/storage/ruimte.ts.
+echo -e "         ${DIM}Hier komen ook de bijlagen van klanten op te staan,${CL}" >&2
+echo -e "         ${DIM}dus dit getal is je opslaggrens. Ruim nemen is${CL}" >&2
+echo -e "         ${DIM}makkelijker dan later vergroten.${CL}" >&2
+DISK=$(ask        "Disk (GB)"           "40")
 MEMORY=$(ask      "RAM (MB)"            "2048")
 SWAP=$(ask        "Swap (MB)"           "512")
 CORES=$(ask       "CPU cores"           "2")
@@ -184,11 +190,24 @@ echo -e "         ${DIM}Leeg laten betekent: heel je LAN mag erbij.${CL}" >&2
 TUNNEL_IP=$(ask "IP van je cloudflared-container" "")
 
 echo "" >&2
-echo -e "         ${DIM}Adres waar klanten voorlopig hun foto's naartoe mailen.${CL}" >&2
-echo -e "         ${DIM}Leeg laten verbergt die knop in het portaal.${CL}" >&2
+echo -e "         ${DIM}Adres waarvan klanten mail ontvangen en waarop zij${CL}" >&2
+echo -e "         ${DIM}kunnen antwoorden. Bijvoorbeeld support@jouwdomein.nl${CL}" >&2
 # Bewust geen standaardwaarde. Dit repo is publiek, en een mailadres in
 # een publiek bestand wordt door spamcrawlers geoogst.
-CONTACT_MAIL=$(ask "Adres voor bestanden" "")
+CONTACT_MAIL=$(ask "Support-adres" "")
+
+echo "" >&2
+echo -e "         ${DIM}Grootste bestand dat een klant mag uploaden.${CL}" >&2
+MAX_UPLOAD_MB=$(ask "Max per bestand (MB)" "2048")
+[[ "$MAX_UPLOAD_MB" =~ ^[0-9]+$ && "$MAX_UPLOAD_MB" -gt 0 ]] \
+  || msg_error "Verwacht een getal in megabytes, bijvoorbeeld 2048"
+
+echo "" >&2
+echo -e "         ${DIM}Opslag per klant. Later per klant te verruimen${CL}" >&2
+echo -e "         ${DIM}zonder de applicatie aan te raken.${CL}" >&2
+QUOTA_GB=$(ask "Opslag per klant (GB)" "5")
+[[ "$QUOTA_GB" =~ ^[0-9]+$ && "$QUOTA_GB" -gt 0 ]] \
+  || msg_error "Verwacht een getal in gigabytes, bijvoorbeeld 5"
 
 # ── Overzicht
 echo -e "\n ${BO}Overzicht${CL}\n ${DIM}$(printf '%0.s─' {1..56})${CL}"
@@ -204,6 +223,8 @@ msg_info "IP            : ${BO}${STATIC_IP:-DHCP}${CL}"
 msg_info "Repo          : ${BO}${REPO}${CL}"
 msg_info "Publieke naam : ${BO}https://${PUBLIEKE_HOST}${CL}"
 msg_info "Tunnel mag    : ${BO}${TUNNEL_IP:-heel het LAN}${CL}"
+msg_info "Max upload    : ${BO}${MAX_UPLOAD_MB} MB per bestand${CL}"
+msg_info "Per klant     : ${BO}${QUOTA_GB} GB opslag${CL}"
 echo ""
 confirm "Doorgaan met de installatie?" || { echo -e "\n Geannuleerd."; exit 0; }
 echo ""
@@ -292,6 +313,8 @@ pct exec "${CT_ID}" -- env \
   KP_PUBLIEKE_HOST="${PUBLIEKE_HOST}" \
   KP_TUNNEL_IP="${TUNNEL_IP}" \
   KP_CONTACT_MAIL="${CONTACT_MAIL}" \
+  KP_MAX_UPLOAD_MB="${MAX_UPLOAD_MB}" \
+  KP_QUOTA_GB="${QUOTA_GB}" \
   bash -c "${INSTALL_SCRIPT}" \
   || msg_error "De installatie in de container is mislukt. Zie de uitvoer hierboven."
 
@@ -325,5 +348,9 @@ echo -e " cookies van dit portaal eisen een beveiligde verbinding. Dat is"
 echo -e " geen storing maar de beveiliging die zijn werk doet."
 echo ""
 echo -e " ${DIM}Bijwerken later:${CL}  ${BO}pct enter ${CT_ID}${CL}  en daarin  ${BO}update${CL}"
+echo ""
+echo -e " ${RD}${BO}Let op de back-up:${CL} de nachtelijke dump bevat de DATABASE,"
+echo -e " niet de bijlagen. Neem CT ${CT_ID} mee in je Proxmox-back-up, anders"
+echo -e " zijn de bestanden van je klanten weg bij een defecte container."
 echo -e " ${DIM}Inloglinks zien:${CL}  ${BO}pct exec ${CT_ID} -- journalctl -u klantportaal -f${CL}"
 echo ""

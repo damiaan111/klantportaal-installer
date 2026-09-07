@@ -8,6 +8,8 @@
 #   KP_PUBLIEKE_HOST   de publieke hostname van het portaal
 #   KP_TUNNEL_IP       IP van de cloudflared-container, mag leeg zijn
 #   KP_CONTACT_MAIL    adres voor bestanden, mag leeg zijn
+#   KP_MAX_UPLOAD_MB   grootste bestand dat een klant mag uploaden
+#   KP_QUOTA_GB        opslag per klant
 #
 set -euo pipefail
 
@@ -20,6 +22,8 @@ fout() { echo -e "  ${RD} err${CL} $*" >&2; exit 1; }
 : "${KP_PUBLIEKE_HOST:?KP_PUBLIEKE_HOST ontbreekt}"
 KP_TUNNEL_IP="${KP_TUNNEL_IP:-}"
 KP_CONTACT_MAIL="${KP_CONTACT_MAIL:-}"
+KP_MAX_UPLOAD_MB="${KP_MAX_UPLOAD_MB:-2048}"
+KP_QUOTA_GB="${KP_QUOTA_GB:-5}"
 
 export DEBIAN_FRONTEND=noninteractive
 
@@ -28,6 +32,12 @@ APP_USER=klantportaal
 KEY_BRON=/root/.ssh/klantportaal_deploy
 KEY_DOEL=/etc/klantportaal/deploy_key
 DB_NAAM=portaal
+
+# Uploads staan BUITEN de map met de code. Dat is geen smaak: `update`
+# weigert te draaien als er lokale wijzigingen in de git-map staan, en
+# een map met uploads erin is precies zo'n wijziging. In /opt zetten
+# betekent dat je nooit meer kunt bijwerken.
+UPLOAD_DIR=/var/lib/klantportaal/uploads
 
 # ── 1. Basispakketten
 stap "Basispakketten installeren"
@@ -118,7 +128,9 @@ if ! id "$APP_USER" >/dev/null 2>&1; then
           --shell /bin/bash "$APP_USER"
 fi
 install -d -o "$APP_USER" -g "$APP_USER" "$APP_DIR"
-ok "draait niet als root"
+# 700: alleen de applicatiegebruiker komt bij de bestanden van klanten.
+install -d -m 700 -o "$APP_USER" -g "$APP_USER" "$UPLOAD_DIR"
+ok "draait niet als root, uploads in ${UPLOAD_DIR}"
 
 # ── 7. Deploy key en de code
 stap "Code ophalen uit de private repo"
@@ -194,6 +206,14 @@ PORTAL_CONTACT_EMAIL=${KP_CONTACT_MAIL}
 # erbij, en dan is /studio bereikbaar voor elk apparaat in je netwerk.
 HOST=0.0.0.0
 PORT=3000
+
+# Bijlagen. Deze map staat BUITEN de git-map, anders weigert `update`.
+UPLOAD_DIR=${UPLOAD_DIR}
+
+# Grootste bestand per upload. De applicatie houdt daarnaast zelf
+# ruimte vrij voor de database en weigert uploads voordat de schijf
+# vol is. Zie src/platform/storage/ruimte.ts.
+MAX_UPLOAD_BYTES=$(( KP_MAX_UPLOAD_MB * 1024 * 1024 ))
 ENVEOF
 chown "$APP_USER:$APP_USER" "${APP_DIR}/.env"
 chmod 600 "${APP_DIR}/.env"
@@ -204,6 +224,13 @@ stap "Migraties uitvoeren"
 sudo -u "$APP_USER" -H bash -c "cd '$APP_DIR' && npm run migrate" 2>&1 | sed 's/^/       /' \
   || fout "Migraties mislukt"
 ok "schema en RLS-policies staan"
+
+# Het quotum heeft een standaard uit de migratie. Hier wordt die op
+# jouw keuze gezet, ook voor klanten die er later bij komen.
+QUOTA_BYTES=$(( KP_QUOTA_GB * 1024 * 1024 * 1024 ))
+su - postgres -c "psql -q -d ${DB_NAAM} -c \"ALTER TABLE customer ALTER COLUMN storage_quota_bytes SET DEFAULT ${QUOTA_BYTES}\"" \
+  || fout "Quotum instellen mislukt"
+ok "opslag per klant: ${KP_QUOTA_GB} GB"
 
 # ── 11. Service
 stap "systemd-service installeren"
