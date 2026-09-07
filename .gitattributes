@@ -1,0 +1,12 @@
+# Shellscripts MOETEN LF houden.
+#
+# Dit staat er omdat het bijna misging. De scripts waren met CRLF
+# geschreven, en bash op Linux struikelt daarover met de melding
+# "set: pipefail: invalid option name". Dat zegt niets over de oorzaak,
+# en de installatie zou bij de eerste regel zijn gestopt.
+#
+# Deze bestanden worden via raw.githubusercontent.com opgehaald en direct
+# aan bash gegeven, dus wat hier in git staat is precies wat er wordt
+# uitgevoerd. Er zit geen stap tussen die dit nog rechtzet.
+*.sh text eol=lf
+*.md text eol=lf
