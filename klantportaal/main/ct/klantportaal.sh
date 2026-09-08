@@ -197,6 +197,12 @@ echo -e "         ${DIM}kunnen antwoorden. Bijvoorbeeld support@jouwdomein.nl${C
 CONTACT_MAIL=$(ask "Support-adres" "")
 
 echo "" >&2
+echo -e "         ${DIM}Waar JIJ meldingen krijgt van nieuwe aanvragen. Leeg${CL}" >&2
+echo -e "         ${DIM}laten gebruikt hetzelfde adres als hierboven.${CL}" >&2
+STUDIO_MAIL=$(ask "Adres voor jouw eigen meldingen" "")
+[[ -z "$STUDIO_MAIL" ]] && STUDIO_MAIL="$CONTACT_MAIL"
+
+echo "" >&2
 echo -e "         ${DIM}Grootste bestand dat een klant mag uploaden.${CL}" >&2
 MAX_UPLOAD_MB=$(ask "Max per bestand (MB)" "2048")
 [[ "$MAX_UPLOAD_MB" =~ ^[0-9]+$ && "$MAX_UPLOAD_MB" -gt 0 ]] \
@@ -313,6 +319,8 @@ pct exec "${CT_ID}" -- env \
   KP_PUBLIEKE_HOST="${PUBLIEKE_HOST}" \
   KP_TUNNEL_IP="${TUNNEL_IP}" \
   KP_CONTACT_MAIL="${CONTACT_MAIL}" \
+  KP_MAIL_FROM="${CONTACT_MAIL}" \
+  KP_MAIL_STUDIO="${STUDIO_MAIL}" \
   KP_MAX_UPLOAD_MB="${MAX_UPLOAD_MB}" \
   KP_QUOTA_GB="${QUOTA_GB}" \
   bash -c "${INSTALL_SCRIPT}" \

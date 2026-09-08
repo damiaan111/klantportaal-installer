@@ -8,6 +8,8 @@
 #   KP_PUBLIEKE_HOST   de publieke hostname van het portaal
 #   KP_TUNNEL_IP       IP van de cloudflared-container, mag leeg zijn
 #   KP_CONTACT_MAIL    adres voor bestanden, mag leeg zijn
+#   KP_MAIL_FROM       afzender van klantmail, mag leeg zijn
+#   KP_MAIL_STUDIO     waar de studio meldingen krijgt, mag leeg zijn
 #   KP_MAX_UPLOAD_MB   grootste bestand dat een klant mag uploaden
 #   KP_QUOTA_GB        opslag per klant
 #
@@ -22,6 +24,8 @@ fout() { echo -e "  ${RD} err${CL} $*" >&2; exit 1; }
 : "${KP_PUBLIEKE_HOST:?KP_PUBLIEKE_HOST ontbreekt}"
 KP_TUNNEL_IP="${KP_TUNNEL_IP:-}"
 KP_CONTACT_MAIL="${KP_CONTACT_MAIL:-}"
+KP_MAIL_FROM="${KP_MAIL_FROM:-${KP_CONTACT_MAIL}}"
+KP_MAIL_STUDIO="${KP_MAIL_STUDIO:-${KP_MAIL_FROM}}"
 KP_MAX_UPLOAD_MB="${KP_MAX_UPLOAD_MB:-2048}"
 KP_QUOTA_GB="${KP_QUOTA_GB:-5}"
 
@@ -92,8 +96,20 @@ ok "$(su - postgres -c 'psql -tAc "select version()"' | cut -d, -f1)"
 # ── 4. Geheimen
 stap "Wachtwoorden en tokens genereren"
 gen() { openssl rand -base64 33 | tr -d '/+=\n' | cut -c1-32; }
-PG_SUPER_PW=$(gen); APP_PW=$(gen); AUTH_PW=$(gen); STUDIO_PW=$(gen); ADMIN_TOKEN=$(gen)
-ok "vijf willekeurige waarden, alleen in ${APP_DIR}/.env"
+# ZES waarden, en de vijfde is er later bij gekomen na een echte fout.
+#
+# Hier stonden er vier wachtwoorden plus het token, en MAIL_PW zat daar
+# niet bij terwijl de rol app_mail wel bestaat sinds migratie 0012. Het
+# gevolg: op een verse installatie kreeg die rol het VOORBEELDWACHTWOORD
+# uit de broncode, want de migrator viel daar stil op terug.
+#
+# De applicatie weigert dat nu (zie controleerWachtwoord in
+# src/platform/db/migrator.ts), dus deze regel en die controle horen bij
+# elkaar. Haal je hier MAIL_PW weg, dan stopt de installatie met een
+# melding in plaats van stil een zwak wachtwoord te zetten.
+PG_SUPER_PW=$(gen); APP_PW=$(gen); AUTH_PW=$(gen)
+STUDIO_PW=$(gen); MAIL_PW=$(gen); ADMIN_TOKEN=$(gen)
+ok "zes willekeurige waarden, alleen in ${APP_DIR}/.env"
 
 # ── 5. Database met de juiste collatie
 #
@@ -184,10 +200,18 @@ DATABASE_URL=postgres://app_user:${APP_PW}@localhost:5432/${DB_NAAM}
 AUTH_DATABASE_URL=postgres://app_auth:${AUTH_PW}@localhost:5432/${DB_NAAM}
 STUDIO_DATABASE_URL=postgres://app_studio:${STUDIO_PW}@localhost:5432/${DB_NAAM}
 
-# scripts/migrate.ts zet de rolwachtwoorden hieruit.
+# app_mail kan bij mail_outbox en bij NIETS anders. Die grens is nodig
+# omdat mail versturen voor alle klanten gebeurt en er dan geen
+# klantcontext is die RLS kan gebruiken. Zie migratie 0012.
+MAIL_DATABASE_URL=postgres://app_mail:${MAIL_PW}@localhost:5432/${DB_NAAM}
+
+# scripts/migrate.ts zet de rolwachtwoorden hieruit. Laat je hier een van
+# de vier weg, dan weigert de migratie in plaats van stil terug te vallen
+# op het voorbeeld uit de broncode.
 APP_DB_PASSWORD=${APP_PW}
 AUTH_DB_PASSWORD=${AUTH_PW}
 STUDIO_DB_PASSWORD=${STUDIO_PW}
+MAIL_DB_PASSWORD=${MAIL_PW}
 
 # Toegang tot /studio. Fase-1-steiger, geen productiemechanisme. Zet
 # /studio achter Cloudflare Access met Entra ID zodra je tenant er staat.
@@ -197,8 +221,36 @@ ADMIN_TOKEN=${ADMIN_TOKEN}
 # Bepaalt de links in de inlogmail. Moet kloppen met je tunnel.
 PORTAL_BASE_URL=https://${KP_PUBLIEKE_HOST}
 
-# Adres waar klanten voorlopig bestanden naartoe mailen.
+# ---------------------------------------------------------------------
+#  Mail versturen
+# ---------------------------------------------------------------------
+# Via Microsoft Graph met client credentials, dus app-only. De applicatie
+# logt niet in ALS een gebruiker, en daarom heeft het afzenderadres GEEN
+# licentie nodig. Een shared mailbox is dus de goedkope en de juiste keuze.
+#
+# Wat daar verplicht bij hoort: Mail.Send als applicatiepermissie geeft het
+# recht om als ELKE mailbox in de tenant te mailen. Een Application Access
+# Policy of RBAC for Applications moet dat inperken tot deze adressen.
+# Zonder die inperking is een uitgelekte clientsecret gelijk aan controle
+# over alle mail in de tenant.
+#
+# Wat NIET werkt op een shared mailbox zonder licentie: SMTP AUTH.
+MAIL_FROM=${KP_MAIL_FROM}
+MAIL_TO_STUDIO=${KP_MAIL_STUDIO}
+
+# Adres dat klanten zien als ze bestanden willen mailen in plaats van
+# uploaden. Uploaden werkt, dus dit is een uitwijk en niet de hoofdweg.
 PORTAL_CONTACT_EMAIL=${KP_CONTACT_MAIL}
+
+# LET OP, NODE_ENV STAAT HIER NIET, EN DAT IS OPZET.
+#
+# Zet je NODE_ENV=production zolang er geen Graph-transport is, dan
+# WEIGERT het portaal te starten. Het devtransport blokkeert dat met
+# opzet, want een portaal dat stil geen mail verstuurt is erger dan een
+# portaal dat niet start.
+#
+# Zodra Graph erin zit hoort NODE_ENV=production wel in de systemd-unit,
+# en dan gaat ook de HSTS-header aan. Die twee horen bij elkaar.
 
 # BEWUSTE KEUZE: wijder dan loopback, want de cloudflared-container is
 # een aparte container en moet hierbij kunnen. De firewallregel in
