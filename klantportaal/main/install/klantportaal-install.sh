@@ -512,5 +512,60 @@ systemctl daemon-reload
 systemctl enable --now klantportaal-backup.timer >/dev/null 2>&1 || true
 ok "elke nacht 03:30, zeven nachten bewaard in /var/backups/klantportaal"
 
+# ── De opruimtaak
+#
+# De tweede stap van de tweetrapsverwijdering. Zonder deze timer verdwijnt
+# een verwijderde bijlage uit het beeld en blijft het bestand voor altijd op
+# schijf staan. Dat is niet alleen verspilde ruimte: bij een AVG-verzoek zou
+# het portaal zeggen dat iets is verwijderd terwijl het er nog is.
+#
+# Ruimt ook achtergebleven .bezig-bestanden op van afgebroken uploads. De
+# database weet van die bestanden niets, dus worden ze nooit meegeteld in
+# het quotum en nooit opgeruimd.
+#
+# Draait om 04:15, dus NA de back-up van 03:30. Andersom zou betekenen dat
+# een bestand van schijf is voordat de back-up eroverheen is gegaan, en dan
+# is de laatste kopie van dat bestand ook weg. Dat is geen ramp voor iets
+# dat een klant heeft verwijderd, maar de volgorde hoort te kloppen.
+stap "Opruimtaak instellen"
+cat > /etc/systemd/system/klantportaal-opruimen.service <<'OPREOF'
+[Unit]
+Description=Klantportaal, verwijderde bijlagen van schijf halen
+After=network-online.target postgresql.service
+
+[Service]
+Type=oneshot
+User=klantportaal
+Group=klantportaal
+WorkingDirectory=/opt/klantportaal
+ExecStart=/usr/bin/npm run opruimen
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=klantportaal-opruimen
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=UPLOADPAD
+OPREOF
+sed -i "s|ReadWritePaths=UPLOADPAD|ReadWritePaths=${UPLOAD_DIR}|" \
+  /etc/systemd/system/klantportaal-opruimen.service
+
+cat > /etc/systemd/system/klantportaal-opruimen.timer <<'OPRTEOF'
+[Unit]
+Description=Klantportaal opruimtaak, elke nacht na de back-up
+
+[Timer]
+OnCalendar=*-*-* 04:15:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+OPRTEOF
+systemctl daemon-reload
+systemctl enable --now klantportaal-opruimen.timer >/dev/null 2>&1 || true
+ok "elke nacht 04:15, na de back-up"
+
 echo ""
 ok "${BO}Installatie voltooid.${CL}"
